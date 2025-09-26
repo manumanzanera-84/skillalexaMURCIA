@@ -3,7 +3,7 @@ const { TwitterApi } = require('twitter-api-v2');
 
 const FEED_URL = 'http://eventos.murcia.es/rss/location/espana/lo-1.rss';
 const TZ = 'Europe/Madrid';
-const MAX_TWEETS = 3;
+const MAX_TWEETS = 4;
 
 function toYMD(date, timeZone) {
   return new Intl.DateTimeFormat('sv-SE', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(date);
