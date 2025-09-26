@@ -27,7 +27,7 @@ function cleanText(s = '', max = 240) {
   });
 
   if (!itemsToday.length) {
-    console.log('No hay eventos hoy; nada que publicar.');
+    console.log('No hay eventos hoy;nada que publicar.');
     return;
   }
 
