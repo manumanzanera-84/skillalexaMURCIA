@@ -38,6 +38,15 @@ function cleanText(s = '', max = 240) {
     accessSecret: process.env.TWITTER_ACCESS_SECRET,
   });
 
+  try {
+  const me = await client.v1.verifyCredentials();
+  console.log('Autenticado como @' + me.screen_name + ' (id ' + me.id_str + ')');
+} catch (e) {
+  console.error('Fallo verifyCredentials():', e?.data || e);
+  process.exit(1);
+}
+
+
   // Publica con v1.1
   for (const it of itemsToday.slice(0, MAX_TWEETS)) {
     const d = it.isoDate ? new Date(it.isoDate) : new Date(it.pubDate);
