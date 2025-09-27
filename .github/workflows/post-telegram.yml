@@ -1,0 +1,22 @@
+name: Eventos a Telegram (diario)
+
+on:
+  schedule:
+    - cron: '0 7 * * *'   # 07:00 UTC ≈ 09:00 Europe/Madrid
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 18
+      - run: npm init -y
+      - run: npm install rss-parser
+      - name: Publicar en Telegram
+        run: node scripts/post-telegram.js
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
