@@ -34,7 +34,7 @@ function sendTG(text) {
     return d && !isNaN(d) && toYMD(d, TZ) === todayYMD;
   });
 
-  if (!todayItems.length) { console.log('No hay eventos hoy.'); return; }
+  if (!todayItems.length) { console.log('No hay eventos hoy por ahora.'); return; }
 
   for (const it of todayItems.slice(0, MAX_POSTS)) {
     const d = it.isoDate ? new Date(it.isoDate) : new Date(it.pubDate);
