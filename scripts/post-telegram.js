@@ -4,7 +4,7 @@ const parser = new RSSParser();
 
 const FEED_URL = 'http://eventos.murcia.es/rss/location/espana/lo-1.rss';
 const TZ = 'Europe/Madrid';
-const MAX_POSTS = 10;
+const MAX_POSTS = 11;
 
 function toYMD(date, timeZone) {
   return new Intl.DateTimeFormat('sv-SE', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(date);
