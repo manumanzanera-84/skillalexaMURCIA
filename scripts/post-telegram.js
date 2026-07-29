@@ -1,14 +1,23 @@
-const https = require('https');
 const RSSParser = require('rss-parser');
-const parser = new RSSParser();
+const parser = new RSSParser({ timeout: 10000 }); // Timeout de 10s para la lectura del RSS
 
 const FEED_URL = 'http://eventos.murcia.es/rss/location/espana/lo-1.rss';
 const TZ = 'Europe/Madrid';
 const MAX_POSTS = 12;
-const DELAY_MS = 500;         // pausa entre mensajes para evitar rate limiting
-const SEND_RETRIES = 3;       // reintentos ante fallos de red o 429
+const DELAY_MS = 1000;         // 1 segundo entre envíos es más seguro para Telegram
+const SEND_RETRIES = 3;
 
-// ── helpers ────────────────────────────────────────────────────────────────
+// Set para controlar duplicados en la misma ejecución
+const processedIds = new Set();
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
+
+function escapeHTML(str = '') {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
 
 function toYMD(date, timeZone) {
   return new Intl.DateTimeFormat('sv-SE', {
@@ -29,38 +38,36 @@ function cleanText(s = '', max = 300) {
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-// ── Telegram ────────────────────────────────────────────────────────────────
+// ── Telegram API (usando Fetch nativo) ──────────────────────────────────────
 
-function sendTG(text) {
+async function sendTG(text) {
   const { TG_BOT_TOKEN, TG_CHAT_ID } = process.env;
-  const data = JSON.stringify({
-    chat_id: TG_CHAT_ID,
-    text,
-    disable_web_page_preview: false,
-    parse_mode: 'HTML'
+  const url = `https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage`;
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      chat_id: TG_CHAT_ID,
+      text,
+      disable_web_page_preview: false,
+      parse_mode: 'HTML'
+    })
   });
-  return new Promise((resolve, reject) => {
-    const u = new URL(`https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage`);
-    const req = https.request(
-      {
-        method: 'POST',
-        hostname: u.hostname,
-        path: u.pathname + u.search,
-        headers: {
-          'Content-Type': 'application/json',
-          'Content-Length': Buffer.byteLength(data)
-        }
-      },
-      res => {
-        let b = '';
-        res.on('data', c => b += c);
-        res.on('end', () => res.statusCode < 300 ? resolve(b) : reject(new Error(`TG ${res.statusCode}: ${b}`)));
-      }
-    );
-    req.on('error', reject);
-    req.write(data);
-    req.end();
-  });
+
+  const body = await response.json();
+
+  if (!response.ok) {
+    // Manejar el caso específico de Too Many Requests (HTTP 429)
+    if (response.status === 429 && body.parameters?.retry_after) {
+      const waitSec = body.parameters.retry_after;
+      console.warn(`⏳ Telegram Rate Limit. Esperando ${waitSec}s...`);
+      await sleep(waitSec * 1000);
+    }
+    throw new Error(`TG ${response.status}: ${body.description || JSON.stringify(body)}`);
+  }
+
+  return body;
 }
 
 async function sendWithRetry(text, retries = SEND_RETRIES) {
@@ -69,33 +76,41 @@ async function sendWithRetry(text, retries = SEND_RETRIES) {
       return await sendTG(text);
     } catch (e) {
       if (i === retries - 1) throw e;
-      const wait = 1000 * 2 ** i; // 1 s → 2 s → 4 s
-      console.warn(`⚠️  Reintento ${i + 1}/${retries - 1} en ${wait}ms — ${e.message}`);
+      const wait = 1000 * 2 ** i;
+      console.warn(`⚠️ Reintento ${i + 1}/${retries - 1} en ${wait}ms — ${e.message}`);
       await sleep(wait);
     }
   }
 }
 
-// ── main ────────────────────────────────────────────────────────────────────
+// ── Main ────────────────────────────────────────────────────────────────────
 
 (async () => {
-  // Validar credenciales antes de hacer cualquier petición
   const { TG_BOT_TOKEN, TG_CHAT_ID } = process.env;
   if (!TG_BOT_TOKEN || !TG_CHAT_ID) {
     console.error('❌ Faltan TG_BOT_TOKEN o TG_CHAT_ID en las variables de entorno');
     process.exit(1);
   }
 
-  const feed = await parser.parseURL(FEED_URL);
+  console.log('📡 Obteniendo RSS de eventos...');
+  let feed;
+  try {
+    feed = await parser.parseURL(FEED_URL);
+  } catch (err) {
+    throw new Error(`Error al descargar el RSS: ${err.message}`);
+  }
+
   const todayYMD = toYMD(new Date(), TZ);
 
   const todayItems = (feed.items || []).filter(it => {
-    const d = it.isoDate ? new Date(it.isoDate) : (it.pubDate ? new Date(it.pubDate) : null);
-    return d && !isNaN(d) && toYMD(d, TZ) === todayYMD;
+    const rawDate = it.isoDate || it.pubDate;
+    if (!rawDate) return false;
+    const d = new Date(rawDate);
+    return !isNaN(d) && toYMD(d, TZ) === todayYMD;
   });
 
   if (!todayItems.length) {
-    console.log('ℹ️  No hay eventos para hoy.');
+    console.log('ℹ️ No hay eventos para hoy.');
     return;
   }
 
@@ -103,10 +118,17 @@ async function sendWithRetry(text, retries = SEND_RETRIES) {
   console.log(`📅 ${items.length} evento(s) encontrado(s) para hoy.`);
 
   for (const it of items) {
-    const d = it.isoDate ? new Date(it.isoDate) : new Date(it.pubDate);
+    // Evita procesar elementos duplicados dentro del mismo feed
+    const itemKey = it.guid || it.link || it.title;
+    if (processedIds.has(itemKey)) continue;
+    processedIds.add(itemKey);
+
+    const d = new Date(it.isoDate || it.pubDate);
     const hora = isNaN(d) ? '' : toHM(d, TZ);
-    const title = cleanText(it.title, 200);
-    const desc = cleanText(it.contentSnippet || it.content || '', 150);
+    
+    // Escapar HTML en el contenido dinámico para no romper parse_mode: 'HTML'
+    const title = escapeHTML(cleanText(it.title, 200));
+    const desc = escapeHTML(cleanText(it.contentSnippet || it.content || '', 150));
     const url = it.link || 'https://eventos.murcia.es';
 
     const lines = [
@@ -120,9 +142,12 @@ async function sendWithRetry(text, retries = SEND_RETRIES) {
     const msg = lines.join('\n');
 
     await sendWithRetry(msg);
-    console.log(`✅ Enviado: ${title}`);
+    console.log(`✅ Enviado: ${it.title}`);
     await sleep(DELAY_MS);
   }
 
-  console.log('🎉 Todos los eventos enviados.');
-})().catch(e => { console.error('❌', e.message); process.exit(1); });
+  console.log('🎉 Todos los eventos procesados.');
+})().catch(e => { 
+  console.error('❌ Error fatal:', e.message); 
+  process.exit(1); 
+});
